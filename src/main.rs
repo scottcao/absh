@@ -12,10 +12,12 @@ use absh::measure::map::MeasureMap;
 use absh::measure::tr::AllMeasures;
 use absh::measure::tr::MaxRss;
 use absh::measure::tr::MeasureDyn;
+use absh::measure::tr::UserDefinedMetric;
 use absh::measure::tr::WallTime;
 use absh::mem_usage::MemUsage;
 use absh::run_log::RunLog;
 use absh::sh::spawn_sh;
+use anyhow::Context;
 use clap::Parser;
 use rand::prelude::SliceRandom;
 use wait4::Wait4;
@@ -54,9 +56,11 @@ struct Opts {
     iterations: Option<u32>,
     #[clap(short = 'm', long, help = "Also measure max resident set size")]
     mem: bool,
+    #[clap(long, help = "Command to obtain user-defined metric as an int")]
+    metric: Option<String>,
 }
 
-fn run_test(log: &mut RunLog, test: &mut Experiment) -> anyhow::Result<()> {
+fn run_test(log: &mut RunLog, test: &mut Experiment, metric: &Option<String>) -> anyhow::Result<()> {
     writeln!(log.both_log_and_stderr())?;
     writeln!(
         log.both_log_and_stderr(),
@@ -117,6 +121,23 @@ fn run_test(log: &mut RunLog, test: &mut Experiment) -> anyhow::Result<()> {
 
     test.measures[MeasureKey::WallTime].push(duration.nanos());
     test.measures[MeasureKey::MaxRss].push(max_rss.bytes());
+
+    if let Some(metric) = metric.as_ref() {
+        let process = spawn_sh(metric)?;
+        let output = process.wait_with_output().context("Obtaining user-defined metric")?;
+        assert!(output.status.success());
+        let metric_str = std::str::from_utf8(&output.stdout).context("Reading metric")?.trim();
+        let metric_value = str::parse::<u64>(metric_str).context("Parsing metric")?;
+        test.measures[MeasureKey::UserDefinedMetric].push(metric_value);
+
+        writeln!(
+            log.both_log_and_stderr(),
+            "{} user defined metric {}",
+            test.name.name_colored(),
+            metric_value,
+        )?;
+    }
+
     Ok(())
 }
 
@@ -124,13 +145,14 @@ fn run_pair(
     log: &mut RunLog,
     opts: &Opts,
     tests: &mut ExperimentMap<Experiment>,
+    metric: &Option<String>,
 ) -> anyhow::Result<()> {
     let mut indices: Vec<ExperimentName> = tests.keys().collect();
     if opts.random_order {
         indices.shuffle(&mut rand::thread_rng());
     }
     for &index in &indices {
-        run_test(log, tests.get_mut(index).unwrap())?;
+        run_test(log, tests.get_mut(index).unwrap(), metric)?;
     }
     Ok(())
 }
@@ -190,7 +212,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     if opts.ignore_first {
-        run_pair(&mut log, &opts, &mut experiments)?;
+        run_pair(&mut log, &opts, &mut experiments, &opts.metric)?;
 
         for (_n, test) in experiments.iter_mut() {
             for numbers in test.measures.values_mut() {
@@ -235,10 +257,13 @@ fn main() -> anyhow::Result<()> {
     if opts.mem {
         measures.push(Box::new(MaxRss));
     }
+    if opts.metric.is_some() {
+        measures.push(Box::new(UserDefinedMetric))
+    }
     let measures = AllMeasures(measures);
 
     loop {
-        run_pair(&mut log, &opts, &mut experiments)?;
+        run_pair(&mut log, &opts, &mut experiments, &opts.metric)?;
 
         let min_count = experiments.values_mut().map(|t| t.runs()).min().unwrap();
         if Some(min_count) == opts.iterations.map(|n| n as usize) {

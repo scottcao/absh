@@ -67,6 +67,29 @@ impl Measure for MaxRss {
     }
 }
 
+pub struct UserDefinedMetric;
+
+impl Measure for UserDefinedMetric {
+    /// Bytes.
+    type NumberDisplay = u64;
+
+    fn number_to_display(&self, number: u64) -> Self::NumberDisplay {
+        number
+    }
+
+    fn key(&self) -> MeasureKey {
+        MeasureKey::UserDefinedMetric
+    }
+
+    fn name(&self) -> &str {
+        "User defined metric"
+    }
+
+    fn id(&self) -> &str {
+        "user-defined-metric"
+    }
+}
+
 pub trait MeasureDyn {
     fn name(&self) -> &str;
     fn make_distr_plots(
